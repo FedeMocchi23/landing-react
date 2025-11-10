@@ -15,16 +15,17 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Share2 } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
 
-// Schema Zod
+// Schema Zod - Sintassi corretta per messaggi di errore
 const ownerSchema = z.object({
   // Sezione A - Profilo rapido
   properties_count: z.enum(["1", "2-3", "4-10", "10+"], {
-    required_error: "Seleziona il numero di immobili",
+    errorMap: () => ({ message: "Seleziona il numero di immobili" })
   }),
   tools_used: z.array(z.string()).max(5, "Massimo 5 strumenti"),
   time_lost_bucket: z.enum(["<2h", "2-5h", "5-10h", "10h+"], {
-    required_error: "Seleziona il tempo speso",
+    errorMap: () => ({ message: "Seleziona il tempo speso" })
   }),
   
   // Sezione B - Pain Matrix (1-5 per ogni area)
@@ -61,16 +62,16 @@ const ownerSchema = z.object({
   
   // Sezione F - Servizi
   central_interest: z.enum(["Si", "Forse", "No"], {
-    required_error: "Seleziona una risposta",
+    errorMap: () => ({ message: "Seleziona una risposta" })
   }),
   service_types: z.array(z.string()).optional(),
   
   // Sezione G - Intento
   usage_intent: z.enum(["subito", "1mese", "piu-avanti", "no"], {
-    required_error: "Seleziona una risposta",
+    errorMap: () => ({ message: "Seleziona una risposta" })
   }),
   wtp_bucket: z.enum(["<10", "10-19", "20-39", "40-69", "70+"], {
-    required_error: "Seleziona una fascia di prezzo",
+    errorMap: () => ({ message: "Seleziona una fascia di prezzo" })
   }),
   
   // Sezione H - Finale
@@ -211,15 +212,17 @@ export const OwnerForm = () => {
     console.log("owner_q_start", { timestamp: new Date().toISOString() });
   }, []);
 
-  // Watch form changes for tracking
+  // Watch form changes for tracking - FIX per i problemi di tipo
   useEffect(() => {
     const subscription = form.watch((value, { name }) => {
-      if (name) {
-        console.log("owner_q_change", { field_id: name, value: value[name] });
+      if (name && value) {
+        // Usa type assertion sicura
+        const fieldValue = (value as any)[name];
+        console.log("owner_q_change", { field_id: name, value: fieldValue });
       }
     });
     return () => subscription.unsubscribe();
-  }, [form.watch]);
+  }, [form]);
 
   // Calculate progress
   useEffect(() => {
@@ -236,8 +239,11 @@ export const OwnerForm = () => {
       let eComplete = true;
       firstTwo.forEach(priority => {
         const field = PRIORITY_TO_FIELD_MAP[priority];
-        if (field && (!values[field] || (values[field] as string[]).length === 0)) {
-          eComplete = false;
+        if (field && values) {
+          const fieldValue = values[field] as string[] | undefined;
+          if (!fieldValue || fieldValue.length === 0) {
+            eComplete = false;
+          }
         }
       });
       if (eComplete && firstTwo.length > 0) filledSections++;
@@ -249,26 +255,53 @@ export const OwnerForm = () => {
       setProgress((filledSections / 8) * 100);
     });
     return () => subscription.unsubscribe();
-  }, [form.watch]);
+  }, [form]);
 
-  const onSubmit = (data: OwnerFormData) => {
-    const emailHash = btoa(data.email);
-    console.log("owner_q_submit", {
-      answers: data,
-      email_hash: emailHash,
-      top_area: data.single_priority,
-      wtp_bucket: data.wtp_bucket,
-      timestamp: new Date().toISOString(),
-    });
-    
-    toast.success("Grazie per il tuo contributo! Ti ricontatteremo presto.");
-    setSubmitted(true);
+  const onSubmit = async (data: OwnerFormData) => {
+    try {
+      // Hash dell'email per tracking anonimo (opzionale)
+      const emailHash = btoa(data.email);
+      
+      console.log("owner_q_submit", {
+        email_hash: emailHash,
+        top_area: data.single_priority,
+        wtp_bucket: data.wtp_bucket,
+        timestamp: new Date().toISOString(),
+      });
+
+      // ✅ SALVA SU SUPABASE
+      const { error } = await supabase
+        .from('questionari')
+        .insert([
+          {
+            tipo: 'owner',
+            email: data.email,
+            dati: data,
+            submitted_at: new Date().toISOString(),
+          }
+        ]);
+
+      if (error) {
+        console.error('Errore Supabase:', error);
+        toast.error("Si è verificato un errore. Riprova.");
+        return;
+      }
+
+      // ✅ SUCCESS
+      toast.success("Grazie per il tuo contributo! Ti ricontatteremo presto.");
+      setSubmitted(true);
+      
+    } catch (err) {
+      console.error('Errore durante il submit:', err);
+      toast.error("Errore di connessione. Controlla la tua rete.");
+    }
   };
 
   const top3 = form.watch("top3");
   const centralInterest = form.watch("central_interest");
   const sectionsToShow = top3?.slice(0, 2).map(p => PRIORITY_TO_FIELD_MAP[p]).filter(Boolean) || [];
 
+  // Il resto del componente rimane identico...
   if (submitted) {
     return (
       <Card className="p-8 text-center space-y-6 bg-card border-owner/30">
@@ -297,6 +330,8 @@ export const OwnerForm = () => {
     );
   }
 
+  // Continua con il resto del componente (form JSX) che rimane identico...
+  
   return (
     <Card className="p-6 md:p-8 bg-card border-owner/30">
       <div className="mb-6 space-y-2">
